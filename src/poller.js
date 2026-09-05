@@ -1,295 +1,182 @@
 const autogopay = require('./autogopay');
 const store = require('./store');
 
-const POLL_INTERVAL_MS = 5000;
-const MAX_POLL_MS = 16 * 60 * 1000;
+const POLL_INTERVAL = 5000; // cek setiap 5 detik
+const MAX_POLL_TIME = 15 * 60 * 1000; // maksimal 15 menit
 
-// transaction_id -> timeoutId
 const activePolls = new Map();
 
-/*
-|--------------------------------------------------------------------------
-| START POLLING
-|--------------------------------------------------------------------------
-*/
-
-function startPolling(
-  transactionId,
-  telegram,
-  sendPaidNotification
-) {
-  // Jangan membuat polling ganda.
+function startPolling(bot, transactionId, chatId) {
   if (activePolls.has(transactionId)) {
+    console.log(`[POLLER] Sudah berjalan: ${transactionId}`);
     return;
   }
 
+  console.log(`[POLLER] Mulai polling: ${transactionId}`);
+
   const startedAt = Date.now();
+  let stopped = false;
+  let checking = false;
 
-  /*
-   * Fungsi polling menggunakan setTimeout,
-   * bukan setInterval.
-   *
-   * Keuntungannya:
-   * request berikutnya TIDAK akan dimulai
-   * sebelum request sebelumnya selesai.
-   */
-  async function poll() {
-    /*
-     * Pastikan transaksi masih aktif.
-     */
-    if (!activePolls.has(transactionId)) {
+  const stop = () => {
+    stopped = true;
+    activePolls.delete(transactionId);
+  };
+
+  const check = async () => {
+    if (stopped) return;
+
+    // Timeout
+    if (Date.now() - startedAt >= MAX_POLL_TIME) {
+      stop();
+      console.log(`[POLLER] Timeout: ${transactionId}`);
       return;
     }
 
-    /*
-     * Safety timeout.
-     */
-    if (
-      Date.now() - startedAt >
-      MAX_POLL_MS
-    ) {
-      console.log(
-        `[POLL] Timeout otomatis: ${transactionId}`
-      );
-
-      stopPolling(transactionId);
+    // Jangan jalankan request baru kalau request sebelumnya belum selesai
+    if (checking) {
+      setTimeout(check, POLL_INTERVAL);
       return;
     }
 
-    /*
-     * Ambil transaksi.
-     */
-    const tx =
-      store.getTransaction(transactionId);
-
-    if (!tx) {
-      console.log(
-        `[POLL] Transaction tidak ditemukan: ${transactionId}`
-      );
-
-      stopPolling(transactionId);
-      return;
-    }
-
-    /*
-     * Kalau transaksi sudah selesai,
-     * tidak perlu request API lagi.
-     */
-    if (
-      [
-        'settlement',
-        'expire',
-        'cancel',
-      ].includes(tx.status)
-    ) {
-      stopPolling(transactionId);
-      return;
-    }
+    checking = true;
 
     try {
-      const start = Date.now();
-
-      const result =
-        await autogopay.checkQrisStatus(
-          transactionId
-        );
-
-      const elapsed =
-        Date.now() - start;
+      const result = await autogopay.checkQrisStatus(transactionId);
+      const status = result?.transaction_status;
 
       console.log(
-        `[POLL] ${transactionId} -> ${
-          result.transaction_status
-        } (${elapsed}ms)`
+        `[POLLER] ${transactionId} => ${status || 'unknown'}`
       );
 
-      /*
-       * Pastikan polling belum dihentikan
-       * oleh proses lain selama request API berjalan.
-       */
-      if (!activePolls.has(transactionId)) {
+      if (!status) {
+        checking = false;
+        if (!stopped) setTimeout(check, POLL_INTERVAL);
         return;
       }
 
-      /*
-       * PEMBAYARAN BERHASIL
-       */
-      if (
-        result.transaction_status ===
-        'settlement'
-      ) {
-        store.updateStatus(
-          transactionId,
-          'settlement'
-        );
+      store.updateStatus(transactionId, status);
 
-        stopPolling(transactionId);
+      // =========================
+      // PEMBAYARAN BERHASIL
+      // =========================
+      if (status === 'settlement') {
+        stop();
 
-        try {
-          await sendPaidNotification(
-            tx.chatId,
-            transactionId
+        const tx = store.getTransaction(transactionId);
+
+        if (!tx) {
+          console.log(
+            `[POLLER] Data transaksi tidak ditemukan: ${transactionId}`
           );
-        } catch (notifyErr) {
-          console.error(
-            `[POLL] Gagal mengirim notifikasi PAID ${transactionId}:`,
-            notifyErr.message
-          );
+          return;
         }
 
-        return;
-      }
+        // Cegah notifikasi pembayaran terkirim dua kali
+        if (tx.paidNotified) {
+          console.log(
+            `[POLLER] Notifikasi sudah dikirim: ${transactionId}`
+          );
+          return;
+        }
 
-      /*
-       * EXPIRE
-       */
-      if (
-        result.transaction_status ===
-        'expire'
-      ) {
-        store.updateStatus(
-          transactionId,
-          'expire'
-        );
+        tx.paidNotified = true;
+        store.saveTransaction(transactionId, tx);
 
-        stopPolling(transactionId);
+        const productName = tx.productName || '-';
+
+        const amount = tx.amount
+          ? Number(tx.amount).toLocaleString('id-ID')
+          : '-';
 
         try {
-          await telegram.sendMessage(
-            tx.chatId,
-            `⌛ Pembayaran untuk Order ID \`${tx.orderId}\` telah kedaluwarsa.`,
+          await bot.telegram.sendMessage(
+            chatId,
+            `✅ *PEMBAYARAN BERHASIL*\n\n` +
+            `Produk: ${productName}\n` +
+            `Jumlah: Rp ${amount}\n` +
+            `Transaction ID: \`${transactionId}\`\n\n` +
+            `Terima kasih sudah berbelanja! 🎉`,
             {
               parse_mode: 'Markdown',
             }
           );
-        } catch (err) {
+
+          console.log(
+            `[POLLER] Notifikasi berhasil dikirim: ${transactionId}`
+          );
+        } catch (sendError) {
           console.error(
-            '[POLL] Gagal kirim pesan expire:',
-            err.message
+            `[POLLER] Gagal kirim notifikasi:`,
+            sendError.message
           );
         }
 
         return;
       }
 
-      /*
-       * CANCEL
-       */
-      if (
-        result.transaction_status ===
-        'cancel'
-      ) {
-        store.updateStatus(
-          transactionId,
-          'cancel'
+      // =========================
+      // QRIS EXPIRED
+      // =========================
+      if (status === 'expire') {
+        stop();
+
+        console.log(
+          `[POLLER] QRIS expired: ${transactionId}`
         );
 
-        stopPolling(transactionId);
+        return;
+      }
 
-        try {
-          await telegram.sendMessage(
-            tx.chatId,
-            `🚫 Pembayaran untuk Order ID \`${tx.orderId}\` telah dibatalkan.`,
-            {
-              parse_mode: 'Markdown',
-            }
-          );
-        } catch (err) {
-          console.error(
-            '[POLL] Gagal kirim pesan cancel:',
-            err.message
-          );
-        }
+      // =========================
+      // QRIS CANCEL
+      // =========================
+      if (status === 'cancel') {
+        stop();
+
+        console.log(
+          `[POLLER] QRIS dibatalkan: ${transactionId}`
+        );
 
         return;
       }
 
-      /*
-       * PENDING
-       *
-       * Jangan melakukan apa-apa.
-       * Polling berikutnya dijadwalkan di bawah.
-       */
     } catch (err) {
-      /*
-       * Error API tidak langsung menghentikan polling.
-       */
       console.error(
-        `[POLL] Gagal cek status ${transactionId}:`,
-        err?.response?.data ||
-          err?.message ||
-          err
+        `[POLLER] Error ${transactionId}:`,
+        err.response?.data || err.message
       );
+    } finally {
+      checking = false;
     }
 
-    /*
-     * Jadwalkan request berikutnya.
-     *
-     * IMPORTANT:
-     * Ini dilakukan setelah request sebelumnya selesai.
-     * Jadi tidak ada request yang menumpuk.
-     */
-    if (activePolls.has(transactionId)) {
-      const timeoutId = setTimeout(
-        poll,
-        POLL_INTERVAL_MS
-      );
-
-      activePolls.set(
-        transactionId,
-        timeoutId
-      );
+    if (!stopped) {
+      setTimeout(check, POLL_INTERVAL);
     }
-  }
+  };
 
-  /*
-   * Mulai polling pertama setelah 5 detik.
-   *
-   * QRIS baru saja dibuat, jadi tidak perlu
-   * langsung melakukan request status.
-   */
-  const timeoutId = setTimeout(
-    poll,
-    POLL_INTERVAL_MS
-  );
+  activePolls.set(transactionId, true);
 
-  activePolls.set(
-    transactionId,
-    timeoutId
-  );
-
-  console.log(
-    `[POLL] Started: ${transactionId}`
-  );
+  // Langsung cek pertama kali
+  check();
 }
 
-/*
-|--------------------------------------------------------------------------
-| STOP POLLING
-|--------------------------------------------------------------------------
-*/
-
 function stopPolling(transactionId) {
-  const timeoutId =
-    activePolls.get(transactionId);
-
-  if (timeoutId) {
-    clearTimeout(timeoutId);
+  if (activePolls.has(transactionId)) {
     activePolls.delete(transactionId);
 
     console.log(
-      `[POLL] Stopped: ${transactionId}`
+      `[POLLER] Polling dihentikan: ${transactionId}`
     );
   }
 }
 
-/*
-|--------------------------------------------------------------------------
-| EXPORT
-|--------------------------------------------------------------------------
-*/
+function isPolling(transactionId) {
+  return activePolls.has(transactionId);
+}
 
 module.exports = {
   startPolling,
   stopPolling,
+  isPolling,
 };
