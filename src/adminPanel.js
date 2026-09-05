@@ -13,20 +13,41 @@ function esc(str) {
   }[c]));
 }
 
+const ICONS = {
+  dashboard: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  orders: '<path d="M4 17l6-6-4-4M20 7l-6 6 4 4" stroke-linecap="round" stroke-linejoin="round"/>',
+  products: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 13v8" stroke-linecap="round"/>',
+  customers: '<circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" stroke-linecap="round"/><circle cx="17.5" cy="9" r="2.5"/><path d="M15 14.2c2.8.4 4.7 2.4 4.7 5.8" stroke-linecap="round"/>',
+  logs: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" stroke-linecap="round" stroke-linejoin="round"/>',
+  broadcast: '<path d="M3 11v2a2 2 0 0 0 2 2h1l5 4V5L6 9H5a2 2 0 0 0-2 2z" stroke-linejoin="round"/><path d="M16 8.5a4 4 0 0 1 0 7M19 5.5a8.5 8.5 0 0 1 0 13" stroke-linecap="round"/>',
+  backup: '<path d="M12 3v12M7 10l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 18v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1" stroke-linecap="round"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 17l5-5-5-5M21 12H9" stroke-linecap="round" stroke-linejoin="round"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" stroke-linecap="round"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z" stroke-linejoin="round"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round"/>',
+  bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4M9 4h6" stroke-linecap="round"/><circle cx="9" cy="14" r="1.3"/><circle cx="15" cy="14" r="1.3"/>',
+};
+
+function svgIcon(name, size = 18) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">${ICONS[name] || ''}</svg>`;
+}
+
 const NAV = [
-  { key: 'dashboard', href: '/admin', icon: '📊', label: 'Dashboard' },
-  { key: 'settings', href: '/admin/settings', icon: '⚙️', label: 'Konfigurasi' },
-  { key: 'orders', href: '/admin/orders', icon: '💳', label: 'Transaksi' },
-  { key: 'products', href: '/admin/products', icon: '📦', label: 'Produk & Markup' },
-  { key: 'customers', href: '/admin/customers', icon: '👥', label: 'Kelola User' },
-  { key: 'logs', href: '/admin/logs', icon: '📝', label: 'Activity Logs' },
-  { key: 'broadcast', href: '/admin/broadcast', icon: '📢', label: 'Broadcast' },
-  { key: 'backup', href: '/admin/backup', icon: '💾', label: 'Backup & Restore' },
+  { key: 'dashboard', href: '/admin', icon: 'dashboard', label: 'Dashboard' },
+  { key: 'settings', href: '/admin/settings', icon: 'settings', label: 'Konfigurasi' },
+  { key: 'orders', href: '/admin/orders', icon: 'orders', label: 'Transaksi' },
+  { key: 'products', href: '/admin/products', icon: 'products', label: 'Produk & Markup' },
+  { key: 'customers', href: '/admin/customers', icon: 'customers', label: 'Kelola User' },
+  { key: 'logs', href: '/admin/logs', icon: 'logs', label: 'Activity Logs' },
+  { key: 'broadcast', href: '/admin/broadcast', icon: 'broadcast', label: 'Broadcast' },
+  { key: 'backup', href: '/admin/backup', icon: 'backup', label: 'Backup & Restore' },
 ];
 
 function layout(title, bodyHtml, activeKey = '') {
   const navHtml = NAV.map(
-    (n) => `<a href="${n.href}" class="navlink${n.key === activeKey ? ' active' : ''}"><span class="navicon">${n.icon}</span>${n.label}</a>`
+    (n) =>
+      `<a href="${n.href}" class="navlink${n.key === activeKey ? ' active' : ''}"><span class="navicon">${svgIcon(n.icon)}</span>${n.label}</a>`
   ).join('');
 
   return `<!DOCTYPE html>
@@ -35,66 +56,121 @@ function layout(title, bodyHtml, activeKey = '') {
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>${esc(title)} - Admin Panel</title>
+<script>
+  // Terapkan tema tersimpan SEBELUM halaman dirender, biar tidak "kedip"
+  (function () {
+    var saved = localStorage.getItem('admin-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+  })();
+</script>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #0b0d12; color: #e6e6e6; }
+  :root[data-theme="dark"] {
+    --bg: #0b0d12; --panel: #10131b; --border: #1e2330; --text: #e6e6e6;
+    --muted: #9aa4b2; --accent: #4f7cff; --accent-soft: #1c2536; --accent-text: #7ba1ff;
+    --hover: #161b26; --input-bg: #0b0d12;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f6fb; --panel: #ffffff; --border: #e3e7ef; --text: #1c2230;
+    --muted: #6b7280; --accent: #4f7cff; --accent-soft: #e8edff; --accent-text: #3457d5;
+    --hover: #f0f3fb; --input-bg: #ffffff;
+  }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: var(--bg); color: var(--text); transition: background 0.15s, color 0.15s; }
   .shell { display: flex; min-height: 100vh; }
-  .sidebar { width: 250px; background: #10131b; border-right: 1px solid #1e2330; padding: 18px 12px; flex-shrink: 0; }
-  .brand { display: flex; align-items: center; gap: 10px; padding: 8px 10px 20px; font-weight: 700; font-size: 16px; }
-  .brand .dot { width: 32px; height: 32px; border-radius: 8px; background: #4f7cff; display: flex; align-items: center; justify-content: center; font-size: 16px; }
-  .navsection { color: #6b7280; font-size: 11px; letter-spacing: 1px; padding: 6px 10px; text-transform: uppercase; }
-  .navlink { display: flex; align-items: center; gap: 10px; color: #9aa4b2; text-decoration: none; padding: 11px 12px; border-radius: 10px; font-size: 14px; margin-bottom: 2px; }
-  .navicon { font-size: 16px; width: 20px; text-align: center; }
-  .navlink.active { background: #1c2536; color: #7ba1ff; }
-  .navlink:hover { background: #161b26; color: #fff; }
-  .topbar { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid #1e2330; }
+  .sidebar { width: 250px; background: var(--panel); border-right: 1px solid var(--border); padding: 18px 12px; flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 8px 10px 20px; font-weight: 700; font-size: 15px; letter-spacing: 0.3px; }
+  .brand .dot { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); display: flex; align-items: center; justify-content: center; color: #fff; }
+  .navsection { color: var(--muted); font-size: 11px; letter-spacing: 1px; padding: 6px 10px; text-transform: uppercase; }
+  .navlink { display: flex; align-items: center; gap: 12px; color: var(--muted); text-decoration: none; padding: 11px 12px; border-radius: 10px; font-size: 14px; margin-bottom: 2px; }
+  .navicon { display: flex; }
+  .navlink.active { background: var(--accent-soft); color: var(--accent-text); }
+  .navlink:hover { background: var(--hover); color: var(--text); }
+  .topbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  .topbar-left { display: flex; align-items: center; gap: 14px; }
   .topbar h1 { font-size: 18px; margin: 0; }
+  .hamburger { display: none; background: none; border: none; color: var(--text); cursor: pointer; padding: 6px; }
+  .topbar-right { display: flex; align-items: center; gap: 10px; }
+  .icon-btn { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--text); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .admin-pill { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text); text-decoration: none; font-size: 14px; }
+  .admin-avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
   .content { flex: 1; min-width: 0; }
   main { padding: 20px 24px; max-width: 1000px; }
-  .card { background: #10131b; border: 1px solid #1e2330; border-radius: 14px; padding: 20px; margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 18px; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #1e2330; vertical-align: top; }
-  th { color: #9aa4b2; font-weight: 600; font-size: 12px; text-transform: uppercase; }
-  input, textarea { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #262d3d; background: #0b0d12; color: #fff; font-size: 14px; margin-top: 4px; }
-  label { font-size: 13px; color: #9aa4b2; display: block; margin-top: 12px; }
-  button, .btn { background: #4f7cff; color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-size: 14px; cursor: pointer; text-decoration: none; display: inline-block; margin-top: 12px; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  input, textarea { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); font-size: 14px; margin-top: 4px; }
+  label { font-size: 13px; color: var(--muted); display: block; margin-top: 12px; }
+  button, .btn { background: var(--accent); color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-size: 14px; cursor: pointer; text-decoration: none; display: inline-block; margin-top: 12px; }
   button.danger, .btn.danger { background: #e5484d; }
-  button.secondary, .btn.secondary { background: #1c2536; color: #cbd5e1; }
+  button.secondary, .btn.secondary { background: var(--accent-soft); color: var(--accent-text); }
   .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; }
   .badge.ok { background: #103a24; color: #4ade80; }
   .badge.warn { background: #3a2e10; color: #fbbf24; }
   .badge.bad { background: #3a1414; color: #f87171; }
-  .muted { color: #9aa4b2; font-size: 13px; }
+  .muted { color: var(--muted); font-size: 13px; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; }
   .row > * { flex: 1; min-width: 140px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 18px; }
-  .stat-card { background: #10131b; border: 1px solid #1e2330; border-radius: 14px; padding: 18px; }
-  .stat-card .label { color: #9aa4b2; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .stat-card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
   .stat-card .value { font-size: 24px; font-weight: 700; margin-top: 8px; }
-  code { background: #0b0d12; padding: 2px 6px; border-radius: 6px; }
+  code { background: var(--bg); padding: 2px 6px; border-radius: 6px; }
   form.inline { display: inline; margin: 0; }
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 8; }
   @media (max-width: 800px) {
-    .shell { flex-direction: column; }
-    .sidebar { width: 100%; display: flex; overflow-x: auto; gap: 4px; padding: 10px; }
-    .brand { display: none; }
-    .navlink { flex-shrink: 0; }
-    .navsection { display: none; }
+    .hamburger { display: flex; }
+    .sidebar { position: fixed; left: 0; top: 0; z-index: 9; transform: translateX(-100%); transition: transform 0.2s; box-shadow: 0 0 30px rgba(0,0,0,0.4); }
+    .sidebar.open { transform: translateX(0); }
+    .overlay.open { display: block; }
+    main { padding: 16px; }
   }
 </style>
 </head>
 <body>
 <div class="shell">
-  <div class="sidebar">
-    <div class="brand"><span class="dot">🤖</span> Admin Panel</div>
+  <div class="overlay" id="overlay" onclick="toggleSidebar(false)"></div>
+  <div class="sidebar" id="sidebar">
+    <div class="brand"><span class="dot">${svgIcon('bot', 20)}</span> ADMIN BOT</div>
     <div class="navsection">Menu</div>
     ${navHtml}
-    <a href="/admin/logout" class="navlink" style="margin-top:16px;"><span class="navicon">🚪</span>Keluar</a>
+    <a href="/admin/logout" class="navlink" style="margin-top:16px;"><span class="navicon">${svgIcon('logout')}</span>Keluar</a>
   </div>
   <div class="content">
-    <div class="topbar"><h1>${esc(title)}</h1></div>
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger" onclick="toggleSidebar(true)">${svgIcon('menu', 22)}</button>
+        <h1>${esc(title)}</h1>
+      </div>
+      <div class="topbar-right">
+        <button class="icon-btn" id="themeToggle" onclick="toggleTheme()" title="Ganti tema"></button>
+        <a href="/admin/logout" class="admin-pill"><span class="admin-avatar">A</span>Admin</a>
+      </div>
+    </div>
     <main>${bodyHtml}</main>
   </div>
 </div>
+<script>
+  function toggleSidebar(open) {
+    document.getElementById('sidebar').classList.toggle('open', open);
+    document.getElementById('overlay').classList.toggle('open', open);
+  }
+  function renderThemeIcon() {
+    var theme = document.documentElement.getAttribute('data-theme');
+    document.getElementById('themeToggle').innerHTML =
+      theme === 'dark'
+        ? '${svgIcon('sun', 18)}'
+        : '${svgIcon('moon', 18)}';
+  }
+  function toggleTheme() {
+    var current = document.documentElement.getAttribute('data-theme');
+    var next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('admin-theme', next);
+    renderThemeIcon();
+  }
+  renderThemeIcon();
+</script>
 </body>
 </html>`;
 }
@@ -107,18 +183,21 @@ function loginPage(error) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Login - Admin Panel</title>
 <style>
+  * { box-sizing: border-box; }
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0b0d12; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-  .box { background: #10131b; border: 1px solid #1e2330; padding: 28px; border-radius: 14px; width: 90%; max-width: 340px; }
-  h1 { font-size: 18px; margin-top: 0; }
-  input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #262d3d; background: #0b0d12; color: #fff; margin-top: 6px; margin-bottom: 14px; font-size: 14px; }
+  .box { background: #10131b; border: 1px solid #1e2330; padding: 32px 28px; border-radius: 16px; width: 90%; max-width: 340px; }
+  .box .dot { width: 44px; height: 44px; border-radius: 12px; background: #4f7cff; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
+  h1 { font-size: 18px; margin: 0 0 20px; }
+  input { width: 100%; padding: 11px; border-radius: 8px; border: 1px solid #262d3d; background: #0b0d12; color: #fff; margin-top: 6px; margin-bottom: 14px; font-size: 14px; }
   label { font-size: 13px; color: #9aa4b2; }
-  button { width: 100%; background: #4f7cff; color: #fff; border: none; padding: 12px; border-radius: 8px; font-size: 14px; cursor: pointer; }
+  button { width: 100%; background: #4f7cff; color: #fff; border: none; padding: 12px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 600; }
   .error { background: #3a1414; color: #f87171; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
 </style>
 </head>
 <body>
   <div class="box">
-    <h1>🔐 Admin Panel Login</h1>
+    <div class="dot">${svgIcon('bot', 22)}</div>
+    <h1>Masuk ke Admin Panel</h1>
     ${error ? `<div class="error">${esc(error)}</div>` : ''}
     <form method="POST" action="/admin/login">
       <label>Username</label>
