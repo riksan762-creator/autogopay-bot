@@ -2,6 +2,7 @@ const express = require('express');
 const config = require('./config');
 const autogopay = require('./autogopay');
 const store = require('./store');
+const poller = require('./poller');
 const { sendPaidNotification } = require('./bot');
 
 function createWebhookServer() {
@@ -60,6 +61,7 @@ function createWebhookServer() {
 
       if (transaction.status === 'PAID') {
         store.updateStatus(transaction.transaction_id, 'settlement');
+        poller.stopPolling(transaction.transaction_id);
         await sendPaidNotification(tx.chatId, transaction.transaction_id);
         console.log(`[WEBHOOK] Notifikasi PAID terkirim untuk ${transaction.transaction_id}`);
       }
