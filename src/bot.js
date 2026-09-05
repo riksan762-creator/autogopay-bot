@@ -7,117 +7,382 @@ const poller = require('./poller');
 
 const bot = new Telegraf(config.botToken);
 
-// Penting: tanpa ini, error tak terduga di dalam handler manapun
-// (misal callback query kedaluwarsa karena koneksi lambat) akan
-// membuat SELURUH proses bot crash. Dengan ini, error cukup di-log
-// dan bot tetap hidup.
+/*
+|--------------------------------------------------------------------------
+| CONFIG
+|--------------------------------------------------------------------------
+*/
+
+const processingBuy = new Set();
+
+/*
+|--------------------------------------------------------------------------
+| GLOBAL ERROR HANDLER
+|--------------------------------------------------------------------------
+*/
+
 bot.catch((err, ctx) => {
-  console.error(`[BOT] Error pada update ${ctx.updateType}:`, err.message);
+  console.error(
+    `[BOT ERROR] update=${ctx?.updateType || 'unknown'}:`,
+    err?.response?.data || err?.message || err
+  );
 });
 
+/*
+|--------------------------------------------------------------------------
+| HELPERS
+|--------------------------------------------------------------------------
+*/
+
 function formatRupiah(n) {
-  return `Rp${Number(n).toLocaleString('id-ID')}`;
+  const number = Number(n);
+
+  if (!Number.isFinite(number)) {
+    return 'Rp0';
+  }
+
+  return `Rp${number.toLocaleString('id-ID')}`;
 }
+
+/**
+ * Menjawab callback query tanpa membuat handler crash
+ * kalau callback sudah expired.
+ */
+async function safeAnswerCbQuery(ctx, text = '') {
+  try {
+    await ctx.answerCbQuery(text);
+    return true;
+  } catch (err) {
+    // Callback Telegram bisa expired.
+    // Jangan sampai membuat proses bot error.
+    return false;
+  }
+}
+
+/**
+ * Kirim pesan error secara aman.
+ */
+async function safeReply(ctx, text) {
+  try {
+    return await ctx.reply(text);
+  } catch (err) {
+    console.error('[SAFE REPLY ERROR]', err.message);
+    return null;
+  }
+}
+
+/**
+ * Edit pesan secara aman.
+ */
+async function safeEditMessageText(ctx, text, extra = {}) {
+  try {
+    return await ctx.editMessageText(text, extra);
+  } catch (err) {
+    console.error('[EDIT MESSAGE ERROR]', err.message);
+    return null;
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| KEYBOARDS
+|--------------------------------------------------------------------------
+*/
 
 function productMenuKeyboard() {
   const products = getAllProducts();
+
+  if (!Array.isArray(products) || products.length === 0) {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback('🔄 Refresh', 'menu')],
+    ]);
+  }
+
   const rows = products.map((p) => [
-    Markup.button.callback(`${p.name} - ${formatRupiah(p.price)}`, `prod_${p.id}`),
+    Markup.button.callback(
+      `${p.name} - ${formatRupiah(p.price)}`,
+      `prod_${p.id}`
+    ),
   ]);
+
   return Markup.inlineKeyboard(rows);
 }
 
 function productDetailKeyboard(productId) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('🛒 Beli', `buy_${productId}`)],
-    [Markup.button.callback('⬅️ Kembali ke menu', 'menu')],
+    [
+      Markup.button.callback(
+        '🛒 Beli',
+        `buy_${productId}`
+      ),
+    ],
+    [
+      Markup.button.callback(
+        '⬅️ Kembali ke menu',
+        'menu'
+      ),
+    ],
   ]);
 }
 
 function paymentKeyboard(transactionId, checkoutUrl) {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback('🔄 Cek Sekarang (opsional)', `check_${transactionId}`)],
-    [Markup.button.url('🔗 Buka Halaman Pembayaran', checkoutUrl)],
-  ]);
+  const buttons = [
+    [
+      Markup.button.callback(
+        '🔄 Cek Sekarang',
+        `check_${transactionId}`
+      ),
+    ],
+  ];
+
+  // Hanya tambahkan URL jika valid.
+  if (
+    typeof checkoutUrl === 'string' &&
+    checkoutUrl.startsWith('http')
+  ) {
+    buttons.push([
+      Markup.button.url(
+        '🔗 Buka Halaman Pembayaran',
+        checkoutUrl
+      ),
+    ]);
+  }
+
+  return Markup.inlineKeyboard(buttons);
 }
 
-// ---------- Commands ----------
+/*
+|--------------------------------------------------------------------------
+| START
+|--------------------------------------------------------------------------
+*/
 
-bot.start((ctx) => {
-  ctx.reply(
-    `Halo, ${ctx.from.first_name}! 👋\nSelamat datang di toko online kami.\n\nSilakan pilih produk di bawah ini:`,
-    productMenuKeyboard()
-  );
+bot.start(async (ctx) => {
+  try {
+    const name = ctx.from?.first_name || 'Kak';
+
+    await ctx.reply(
+      `Halo, ${name}! 👋\n` +
+      `Selamat datang di toko online kami.\n\n` +
+      `Silakan pilih produk di bawah ini:`,
+      productMenuKeyboard()
+    );
+  } catch (err) {
+    console.error('[START ERROR]', err.message);
+  }
 });
 
-bot.command('menu', (ctx) => {
-  ctx.reply('Daftar produk:', productMenuKeyboard());
+/*
+|--------------------------------------------------------------------------
+| MENU COMMAND
+|--------------------------------------------------------------------------
+*/
+
+bot.command('menu', async (ctx) => {
+  try {
+    await ctx.reply(
+      'Daftar produk:',
+      productMenuKeyboard()
+    );
+  } catch (err) {
+    console.error('[MENU COMMAND ERROR]', err.message);
+  }
 });
+
+/*
+|--------------------------------------------------------------------------
+| MENU BUTTON
+|--------------------------------------------------------------------------
+*/
 
 bot.action('menu', async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.editMessageText('Daftar produk:', productMenuKeyboard());
+  try {
+    /*
+     * Jalankan answer callback dan edit secara paralel.
+     * Jadi kita tidak perlu menunggu answerCbQuery selesai
+     * sebelum mulai mengubah pesan.
+     */
+    await Promise.allSettled([
+      safeAnswerCbQuery(ctx),
+      safeEditMessageText(
+        ctx,
+        'Daftar produk:',
+        productMenuKeyboard()
+      ),
+    ]);
+  } catch (err) {
+    console.error('[MENU ACTION ERROR]', err.message);
+  }
 });
 
-// ---------- Pilih produk ----------
+/*
+|--------------------------------------------------------------------------
+| PRODUCT DETAIL
+|--------------------------------------------------------------------------
+*/
 
 bot.action(/^prod_(.+)$/, async (ctx) => {
   const productId = ctx.match[1];
-  const product = getProductById(productId);
-  await ctx.answerCbQuery();
 
-  if (!product) {
-    return ctx.reply('Produk tidak ditemukan.');
-  }
+  try {
+    const product = getProductById(productId);
 
-  await ctx.editMessageText(
-    `*${product.name}*\n${product.description}\n\nHarga: *${formatRupiah(product.price)}*`,
-    {
-      parse_mode: 'Markdown',
-      ...productDetailKeyboard(product.id),
+    /*
+     * Callback dijawab segera.
+     */
+    const answerPromise = safeAnswerCbQuery(ctx);
+
+    if (!product) {
+      await answerPromise;
+      return safeReply(ctx, '❌ Produk tidak ditemukan.');
     }
-  );
+
+    /*
+     * Jawab callback + edit pesan secara paralel.
+     */
+    await Promise.allSettled([
+      answerPromise,
+      safeEditMessageText(
+        ctx,
+        `*${product.name}*\n` +
+          `${product.description}\n\n` +
+          `Harga: *${formatRupiah(product.price)}*`,
+        {
+          parse_mode: 'Markdown',
+          ...productDetailKeyboard(product.id),
+        }
+      ),
+    ]);
+  } catch (err) {
+    console.error(
+      '[PRODUCT ERROR]',
+      err?.response?.data || err.message
+    );
+
+    await safeReply(
+      ctx,
+      '❌ Terjadi kesalahan saat membuka produk.'
+    );
+  }
 });
 
-// ---------- Tombol Beli -> generate QRIS ----------
+/*
+|--------------------------------------------------------------------------
+| BUY PRODUCT
+|--------------------------------------------------------------------------
+*/
 
 bot.action(/^buy_(.+)$/, async (ctx) => {
   const productId = ctx.match[1];
-  const product = getProductById(productId);
-  await ctx.answerCbQuery();
 
-  if (!product) {
-    return ctx.reply('Produk tidak ditemukan.');
+  /*
+   * Buat ID unik berdasarkan chat + product.
+   * Mencegah user menekan tombol Beli berkali-kali
+   * secara bersamaan.
+   */
+  const lockKey = `${ctx.chat?.id}:${productId}`;
+
+  if (processingBuy.has(lockKey)) {
+    await safeAnswerCbQuery(
+      ctx,
+      '⏳ Pesanan sedang diproses...'
+    );
+
+    return;
   }
 
-  const loadingMsg = await ctx.reply('⏳ Membuat QRIS pembayaran, mohon tunggu...');
-  const t0 = Date.now();
+  processingBuy.add(lockKey);
+
+  let loadingMsg = null;
+
+  const totalStart = Date.now();
 
   try {
-    const qris = await autogopay.generateQris(product.price);
-    const t1 = Date.now();
-    console.log(`[TIMING] generateQris (panggil AutoGoPay) memakan waktu ${t1 - t0}ms`);
+    const product = getProductById(productId);
 
-    store.saveTransaction(qris.transaction_id, {
-      chatId: ctx.chat.id,
-      productId: product.id,
-      productName: product.name,
-      amount: qris.amount,
-      orderId: qris.order_id,
-      status: qris.transaction_status,
-    });
+    /*
+     * Jawab callback secepat mungkin.
+     */
+    await safeAnswerCbQuery(ctx);
 
+    if (!product) {
+      return safeReply(ctx, '❌ Produk tidak ditemukan.');
+    }
+
+    /*
+     * Kirim loading.
+     */
+    loadingMsg = await ctx.reply(
+      '⏳ Membuat QRIS pembayaran...\nMohon tunggu sebentar.'
+    );
+
+    if (!loadingMsg) {
+      throw new Error('Gagal membuat pesan loading.');
+    }
+
+    /*
+     * REQUEST AUTOGOPAY
+     */
+    const apiStart = Date.now();
+
+    const qris = await autogopay.generateQris(
+      product.price
+    );
+
+    const apiTime = Date.now() - apiStart;
+
+    console.log(
+      `[TIMING] AutoGoPay generateQris: ${apiTime}ms`
+    );
+
+    /*
+     * Validasi response AutoGoPay.
+     */
+    if (!qris || !qris.transaction_id) {
+      throw new Error(
+        'Response AutoGoPay tidak memiliki transaction_id.'
+      );
+    }
+
+    if (!qris.qr_url) {
+      throw new Error(
+        'Response AutoGoPay tidak memiliki qr_url.'
+      );
+    }
+
+    /*
+     * SIMPAN TRANSAKSI
+     */
+    store.saveTransaction(
+      qris.transaction_id,
+      {
+        chatId: ctx.chat.id,
+        productId: product.id,
+        productName: product.name,
+        amount: qris.amount,
+        orderId: qris.order_id,
+        status: qris.transaction_status,
+      }
+    );
+
+    /*
+     * CAPTION QRIS
+     */
     const caption =
-      `🧾 *Pesanan Baru*\n` +
+      `🧾 *Pesanan Baru*\n\n` +
       `Produk: ${product.name}\n` +
       `Jumlah: *${formatRupiah(qris.amount)}*\n` +
       `Order ID: \`${qris.order_id}\`\n` +
       `Kedaluwarsa: ${qris.expiry_time}\n\n` +
-      `Silakan scan QRIS di bawah ini menggunakan aplikasi GoPay/e-wallet kamu, atau klik tombol "Buka Halaman Pembayaran".\n\n` +
-      `🔄 Bot akan otomatis mengecek pembayaran setiap beberapa detik — begitu terbayar, notifikasi PAID akan langsung dikirim tanpa perlu tekan tombol apapun.`;
+      `Silakan scan QRIS menggunakan aplikasi ` +
+      `e-wallet kamu, atau klik tombol pembayaran.\n\n` +
+      `🔄 Bot akan otomatis mengecek pembayaran.`;
 
-    // Ubah langsung pesan "loading" jadi foto QRIS (1 request ke Telegram),
-    // lebih cepat dibanding hapus pesan lama + kirim pesan baru (2 request).
+    /*
+     * EDIT LOADING MENJADI QRIS
+     */
+    const telegramStart = Date.now();
+
     await ctx.telegram.editMessageMedia(
       ctx.chat.id,
       loadingMsg.message_id,
@@ -128,91 +393,261 @@ bot.action(/^buy_(.+)$/, async (ctx) => {
         caption,
         parse_mode: 'Markdown',
       },
-      paymentKeyboard(qris.transaction_id, qris.checkout_url)
+      paymentKeyboard(
+        qris.transaction_id,
+        qris.checkout_url
+      )
     );
-    const t2 = Date.now();
-    console.log(`[TIMING] Kirim foto QRIS ke Telegram memakan waktu ${t2 - t1}ms`);
-    console.log(`[TIMING] TOTAL dari klik Beli sampai QR tampil: ${t2 - t0}ms`);
 
-    // simpan message_id supaya webhook nanti bisa update pesan yang sama
-    const tx = store.getTransaction(qris.transaction_id);
-    tx.messageId = loadingMsg.message_id;
-    store.saveTransaction(qris.transaction_id, tx);
+    const telegramTime = Date.now() - telegramStart;
 
-    // mulai auto-polling di background - user tidak perlu tekan apapun
-    poller.startPolling(qris.transaction_id, ctx.telegram, sendPaidNotification);
+    console.log(
+      `[TIMING] Telegram QRIS: ${telegramTime}ms`
+    );
+
+    /*
+     * SIMPAN MESSAGE ID
+     */
+    const tx = store.getTransaction(
+      qris.transaction_id
+    );
+
+    if (tx) {
+      tx.messageId = loadingMsg.message_id;
+
+      store.saveTransaction(
+        qris.transaction_id,
+        tx
+      );
+    }
+
+    /*
+     * MULAI POLLING
+     *
+     * Tidak ditunggu dengan await supaya user
+     * tidak perlu menunggu proses polling.
+     */
+    try {
+      poller.startPolling(
+        qris.transaction_id,
+        ctx.telegram,
+        sendPaidNotification
+      );
+    } catch (pollErr) {
+      console.error(
+        '[POLLER START ERROR]',
+        pollErr.message
+      );
+    }
+
+    const totalTime = Date.now() - totalStart;
+
+    console.log(
+      `[TIMING] TOTAL BUY -> QRIS: ${totalTime}ms`
+    );
   } catch (err) {
-    console.error('[BUY] Gagal generate QRIS:', err.response?.data || err.message);
-    await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
-    await ctx.reply(
-      '❌ Gagal membuat QRIS pembayaran. Coba lagi beberapa saat, atau hubungi admin.'
+    console.error(
+      '[BUY ERROR]',
+      err?.response?.data || err?.message || err
     );
+
+    /*
+     * Hapus pesan loading jika masih ada.
+     */
+    if (loadingMsg?.message_id) {
+      try {
+        await ctx.telegram.deleteMessage(
+          ctx.chat.id,
+          loadingMsg.message_id
+        );
+      } catch (_) {
+        // Tidak masalah jika pesan sudah berubah/terhapus.
+      }
+    }
+
+    await safeReply(
+      ctx,
+      '❌ Gagal membuat QRIS pembayaran.\n\n' +
+        'Silakan coba lagi beberapa saat.'
+    );
+  } finally {
+    processingBuy.delete(lockKey);
   }
 });
 
-// ---------- Cek status manual ----------
+/*
+|--------------------------------------------------------------------------
+| CHECK PAYMENT STATUS
+|--------------------------------------------------------------------------
+*/
 
 bot.action(/^check_(.+)$/, async (ctx) => {
   const transactionId = ctx.match[1];
 
   try {
-    const result = await autogopay.checkQrisStatus(transactionId);
-    store.updateStatus(transactionId, result.transaction_status);
+    /*
+     * Callback langsung dijawab agar tombol Telegram
+     * tidak terlihat loading terlalu lama.
+     */
+    const callbackPromise = safeAnswerCbQuery(
+      ctx,
+      '⏳ Mengecek pembayaran...'
+    );
 
-    const statusText = describeStatus(result.transaction_status);
-    try {
-      await ctx.answerCbQuery(statusText, { show_alert: true });
-    } catch (cbErr) {
-      // callback query sudah kedaluwarsa (>15 detik) karena koneksi lambat -
-      // kirim sebagai pesan biasa saja, jangan biarkan ini melempar error lagi
-      await ctx.reply(statusText).catch(() => {});
+    /*
+     * Request ke AutoGoPay.
+     */
+    const result =
+      await autogopay.checkQrisStatus(
+        transactionId
+      );
+
+    /*
+     * Update database/store.
+     */
+    if (result?.transaction_status) {
+      store.updateStatus(
+        transactionId,
+        result.transaction_status
+      );
     }
 
-    if (result.transaction_status === 'settlement') {
+    await callbackPromise;
+
+    const status =
+      result?.transaction_status || 'unknown';
+
+    const statusText = describeStatus(status);
+
+    /*
+     * Status PAID
+     */
+    if (status === 'settlement') {
       poller.stopPolling(transactionId);
-      await sendPaidNotification(ctx.chat.id, transactionId);
-    } else if (result.transaction_status === 'expire' || result.transaction_status === 'cancel') {
+
+      await sendPaidNotification(
+        ctx.chat.id,
+        transactionId
+      );
+
+      return;
+    }
+
+    /*
+     * Expired / Cancel
+     */
+    if (
+      status === 'expire' ||
+      status === 'cancel'
+    ) {
       poller.stopPolling(transactionId);
     }
+
+    /*
+     * Kirim status sebagai alert.
+     *
+     * Callback sebelumnya sudah dijawab,
+     * jadi gunakan pesan biasa.
+     */
+    await safeReply(
+      ctx,
+      statusText
+    );
   } catch (err) {
-    console.error('[CHECK] Gagal cek status:', err.response?.data || err.message);
-    try {
-      await ctx.answerCbQuery('Gagal mengecek status. Coba lagi.', { show_alert: true });
-    } catch (cbErr) {
-      await ctx.reply('❌ Gagal mengecek status pembayaran. Coba lagi.').catch(() => {});
-    }
+    console.error(
+      '[CHECK ERROR]',
+      err?.response?.data || err?.message || err
+    );
+
+    await safeReply(
+      ctx,
+      '❌ Gagal mengecek status pembayaran.\n' +
+        'Silakan coba lagi.'
+    );
   }
 });
+
+/*
+|--------------------------------------------------------------------------
+| PAYMENT STATUS TEXT
+|--------------------------------------------------------------------------
+*/
 
 function describeStatus(status) {
   switch (status) {
     case 'pending':
       return '⏳ Status: Menunggu pembayaran';
+
     case 'settlement':
       return '✅ Status: PAID / Sudah dibayar';
+
     case 'expire':
       return '⌛ Status: Kedaluwarsa';
+
     case 'cancel':
       return '🚫 Status: Dibatalkan';
+
     default:
       return `Status: ${status}`;
   }
 }
 
-/**
- * Dipanggil dari action "Cek Status" ATAU dari webhook server saat
- * AutoGoPay mengirim notifikasi transaction.received dengan status PAID.
- */
-async function sendPaidNotification(chatId, transactionId) {
-  const tx = store.getTransaction(transactionId);
-  const productName = tx?.productName || '-';
-  const amount = tx?.amount ? formatRupiah(tx.amount) : '-';
+/*
+|--------------------------------------------------------------------------
+| PAID NOTIFICATION
+|--------------------------------------------------------------------------
+*/
 
-  await bot.telegram.sendMessage(
-    chatId,
-    `✅ *PEMBAYARAN BERHASIL*\n\nProduk: ${productName}\nJumlah: ${amount}\nTransaction ID: \`${transactionId}\`\n\nTerima kasih sudah berbelanja! 🎉`,
-    { parse_mode: 'Markdown' }
-  );
+async function sendPaidNotification(
+  chatId,
+  transactionId
+) {
+  try {
+    const tx =
+      store.getTransaction(transactionId);
+
+    if (!tx) {
+      console.error(
+        `[PAID] Transaction tidak ditemukan: ${transactionId}`
+      );
+
+      return;
+    }
+
+    const productName =
+      tx.productName || '-';
+
+    const amount =
+      tx.amount
+        ? formatRupiah(tx.amount)
+        : '-';
+
+    await bot.telegram.sendMessage(
+      chatId,
+      `✅ *PEMBAYARAN BERHASIL*\n\n` +
+        `Produk: ${productName}\n` +
+        `Jumlah: ${amount}\n` +
+        `Transaction ID: \`${transactionId}\`\n\n` +
+        `Terima kasih sudah berbelanja! 🎉`,
+      {
+        parse_mode: 'Markdown',
+      }
+    );
+  } catch (err) {
+    console.error(
+      '[PAID NOTIFICATION ERROR]',
+      err?.response?.data || err?.message || err
+    );
+  }
 }
 
-module.exports = { bot, sendPaidNotification };
+/*
+|--------------------------------------------------------------------------
+| EXPORT
+|--------------------------------------------------------------------------
+*/
+
+module.exports = {
+  bot,
+  sendPaidNotification,
+};
