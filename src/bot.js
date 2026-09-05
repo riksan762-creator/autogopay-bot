@@ -4,6 +4,7 @@ const { getAllProducts, getProductById, takeStock } = require('./products');
 const autogopay = require('./autogopay');
 const store = require('./store');
 const poller = require('./poller');
+const db = require('./db');
 
 
 const bot = new Telegraf(config.botToken);
@@ -31,6 +32,27 @@ bot.catch((err, ctx) => {
     `[BOT ERROR] update=${ctx?.updateType || 'unknown'}:`,
     err?.response?.data || err?.message || err
   );
+});
+
+
+/*
+|--------------------------------------------------------------------------
+| BLOKIR USER (dicek sebelum command/tombol apapun diproses)
+|--------------------------------------------------------------------------
+*/
+
+
+bot.use(async (ctx, next) => {
+  const chatId = ctx.chat?.id || ctx.from?.id;
+  if (chatId && db.isBlocked(chatId)) {
+    if (ctx.callbackQuery) {
+      await ctx.answerCbQuery('🚫 Kamu diblokir dan tidak bisa menggunakan bot ini.', { show_alert: true }).catch(() => {});
+    } else {
+      await ctx.reply('🚫 Kamu diblokir dan tidak bisa menggunakan bot ini.').catch(() => {});
+    }
+    return; // stop di sini, jangan lanjut ke handler manapun
+  }
+  return next();
 });
 
 
@@ -193,14 +215,23 @@ function paymentKeyboard(transactionId, checkoutUrl) {
 bot.start(async (ctx) => {
   try {
     const name = ctx.from?.first_name || 'Kak';
-
-
-    await ctx.reply(
-      `Halo, ${name}! 👋\n` +
-      `Selamat datang di toko online kami.\n\n` +
-      `Silakan pilih produk di bawah ini:`,
-      productMenuKeyboard()
+    const settings = db.getSettings();
+    const welcomeText = (settings.welcomeText || 'Halo, {name}! Selamat datang.').replace(
+      /\{name\}/g,
+      name
     );
+
+    if (settings.bannerUrl) {
+      await ctx.replyWithPhoto(settings.bannerUrl, {
+        caption: welcomeText,
+        ...productMenuKeyboard(),
+      }).catch(async () => {
+        // kalau banner gagal dimuat (URL rusak/expired), tetap kirim teks + menu
+        await ctx.reply(welcomeText, productMenuKeyboard());
+      });
+    } else {
+      await ctx.reply(welcomeText, productMenuKeyboard());
+    }
   } catch (err) {
     console.error('[START ERROR]', err.message);
   }
