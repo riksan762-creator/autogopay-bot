@@ -91,9 +91,12 @@ bot.action(/^buy_(.+)$/, async (ctx) => {
   }
 
   const loadingMsg = await ctx.reply('⏳ Membuat QRIS pembayaran, mohon tunggu...');
+  const t0 = Date.now();
 
   try {
     const qris = await autogopay.generateQris(product.price);
+    const t1 = Date.now();
+    console.log(`[TIMING] generateQris (panggil AutoGoPay) memakan waktu ${t1 - t0}ms`);
 
     store.saveTransaction(qris.transaction_id, {
       chatId: ctx.chat.id,
@@ -104,8 +107,6 @@ bot.action(/^buy_(.+)$/, async (ctx) => {
       status: qris.transaction_status,
     });
 
-    await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
-
     const caption =
       `🧾 *Pesanan Baru*\n` +
       `Produk: ${product.name}\n` +
@@ -115,15 +116,27 @@ bot.action(/^buy_(.+)$/, async (ctx) => {
       `Silakan scan QRIS di bawah ini menggunakan aplikasi GoPay/e-wallet kamu, atau klik tombol "Buka Halaman Pembayaran".\n\n` +
       `🔄 Bot akan otomatis mengecek pembayaran setiap beberapa detik — begitu terbayar, notifikasi PAID akan langsung dikirim tanpa perlu tekan tombol apapun.`;
 
-    const sentMsg = await ctx.replyWithPhoto(qris.qr_url, {
-      caption,
-      parse_mode: 'Markdown',
-      ...paymentKeyboard(qris.transaction_id, qris.checkout_url),
-    });
+    // Ubah langsung pesan "loading" jadi foto QRIS (1 request ke Telegram),
+    // lebih cepat dibanding hapus pesan lama + kirim pesan baru (2 request).
+    await ctx.telegram.editMessageMedia(
+      ctx.chat.id,
+      loadingMsg.message_id,
+      undefined,
+      {
+        type: 'photo',
+        media: qris.qr_url,
+        caption,
+        parse_mode: 'Markdown',
+      },
+      paymentKeyboard(qris.transaction_id, qris.checkout_url)
+    );
+    const t2 = Date.now();
+    console.log(`[TIMING] Kirim foto QRIS ke Telegram memakan waktu ${t2 - t1}ms`);
+    console.log(`[TIMING] TOTAL dari klik Beli sampai QR tampil: ${t2 - t0}ms`);
 
     // simpan message_id supaya webhook nanti bisa update pesan yang sama
     const tx = store.getTransaction(qris.transaction_id);
-    tx.messageId = sentMsg.message_id;
+    tx.messageId = loadingMsg.message_id;
     store.saveTransaction(qris.transaction_id, tx);
 
     // mulai auto-polling di background - user tidak perlu tekan apapun
