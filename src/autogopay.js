@@ -4,7 +4,7 @@ const config = require('./config');
 
 const client = axios.create({
   baseURL: config.autogopay.baseUrl,
-  timeout: 15000,
+  timeout: 20000,
   headers: {
     Authorization: `Bearer ${config.autogopay.apiKey}`,
     'Content-Type': 'application/json',
@@ -29,13 +29,38 @@ async function generateQris(amount) {
  * Cek status transaksi QRIS GoPay.
  * Docs: POST /qris/status  { transaction_id }
  * transaction_status: pending | settlement | expire | cancel
+ *
+ * Catatan: di lapangan, untuk transaksi yang masih PENDING, API ini kadang
+ * membalas dengan success:false + message:"Transaction pending" (bukan
+ * success:true seperti transaksi yang sudah final). Jadi jangan langsung
+ * anggap success:false sebagai error - itu bisa jadi cuma status "pending".
  */
 async function checkQrisStatus(transactionId) {
   const res = await client.post('/qris/status', { transaction_id: transactionId });
-  if (!res.data?.success) {
-    throw new Error(res.data?.message || 'Gagal cek status transaksi');
+  const body = res.data;
+
+  // Bentuk normal sesuai dokumentasi: { success: true, data: { transaction_status, ... } }
+  if (body?.data?.transaction_status) {
+    return body.data;
   }
-  return res.data.data;
+
+  // Fallback: baca dari field message ketika data tidak dikirim
+  const msg = (body?.message || '').toLowerCase();
+  if (msg.includes('pending')) {
+    return { transaction_id: transactionId, transaction_status: 'pending' };
+  }
+  if (msg.includes('settlement') || msg.includes('paid') || msg.includes('success')) {
+    return { transaction_id: transactionId, transaction_status: 'settlement' };
+  }
+  if (msg.includes('expire')) {
+    return { transaction_id: transactionId, transaction_status: 'expire' };
+  }
+  if (msg.includes('cancel')) {
+    return { transaction_id: transactionId, transaction_status: 'cancel' };
+  }
+
+  // Benar-benar tidak dikenali -> baru dianggap error
+  throw new Error(body?.message || 'Gagal cek status transaksi');
 }
 
 /**
