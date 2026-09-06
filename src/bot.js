@@ -5,6 +5,7 @@ const autogopay = require('./autogopay');
 const store = require('./store');
 const poller = require('./poller');
 const db = require('./db');
+const sshProvision = require('./sshProvision');
 
 
 const bot = new Telegraf(config.botToken);
@@ -136,14 +137,17 @@ function productMenuKeyboard() {
   }
 
 
-  const rows = products.map((p) => [
-    Markup.button.callback(
-      p.stockCount > 0
-        ? `${p.name} - ${formatRupiah(p.price)} (Stok: ${p.stockCount})`
-        : `${p.name} - HABIS`,
-      `prod_${p.id}`
-    ),
-  ]);
+  const rows = products.map((p) => {
+    let label;
+    if (p.type === 'auto') {
+      label = `${p.name} - Mulai ${formatRupiah(p.price)} (Auto)`;
+    } else if (p.stockCount > 0) {
+      label = `${p.name} - ${formatRupiah(p.price)} (Stok: ${p.stockCount})`;
+    } else {
+      label = `${p.name} - HABIS`;
+    }
+    return [Markup.button.callback(label, `prod_${p.id}`)];
+  });
 
 
   return Markup.inlineKeyboard(rows);
@@ -169,6 +173,24 @@ function productDetailKeyboard(productId, inStock) {
       '⬅️ Kembali ke menu',
       'menu'
     ),
+  ]);
+
+
+  return Markup.inlineKeyboard(rows);
+}
+
+
+function durationKeyboard(product) {
+  const rows = (product.durations || []).map((d, i) => [
+    Markup.button.callback(
+      `${d.label} - ${formatRupiah(d.price)}`,
+      `durbuy_${product.id}_${i}`
+    ),
+  ]);
+
+
+  rows.push([
+    Markup.button.callback('⬅️ Kembali ke menu', 'menu'),
   ]);
 
 
@@ -315,6 +337,28 @@ bot.action(/^prod_(.+)$/, async (ctx) => {
     /*
      * Jawab callback + edit pesan secara paralel.
      */
+    if (product.type === 'auto') {
+      const durationLines = (product.durations || [])
+        .map((d) => `• ${d.label}: ${formatRupiah(d.price)}`)
+        .join('\n') || 'Belum ada pilihan durasi diatur admin.';
+
+      await Promise.allSettled([
+        answerPromise,
+        safeEditMessageText(
+          ctx,
+          `*${product.name}*\n` +
+            `${product.description}\n\n` +
+            `Pilihan Durasi:\n${durationLines}\n\n` +
+            `⚡ Akun dibuat otomatis begitu pembayaran terkonfirmasi.`,
+          {
+            parse_mode: 'Markdown',
+            ...durationKeyboard(product),
+          }
+        ),
+      ]);
+      return;
+    }
+
     const stockLine =
       product.stockCount > 0
         ? `Stok tersedia: ${product.stockCount}`
@@ -601,6 +645,105 @@ bot.action(/^buy_(.+)$/, async (ctx) => {
 
 /*
 |--------------------------------------------------------------------------
+| BUY PRODUCT (AUTO-PROVISIONING, DENGAN DURASI)
+|--------------------------------------------------------------------------
+*/
+
+
+bot.action(/^durbuy_(.+)_(\d+)$/, async (ctx) => {
+  const productId = ctx.match[1];
+  const durationIndex = Number(ctx.match[2]);
+  const lockKey = `${ctx.chat?.id}:${productId}:${durationIndex}`;
+
+  if (processingBuy.has(lockKey)) {
+    await safeAnswerCbQuery(ctx, '⏳ Pesanan sedang diproses...');
+    return;
+  }
+  processingBuy.add(lockKey);
+
+  let loadingMsg = null;
+
+  try {
+    const product = getProductById(productId);
+    await safeAnswerCbQuery(ctx);
+
+    if (!product || product.type !== 'auto') {
+      return safeReply(ctx, '❌ Produk tidak ditemukan.');
+    }
+
+    const duration = (product.durations || [])[durationIndex];
+    if (!duration) {
+      return safeReply(ctx, '❌ Pilihan durasi tidak valid, silakan pilih ulang dari menu.');
+    }
+
+    loadingMsg = await ctx.reply('⏳ Membuat QRIS pembayaran...\nMohon tunggu sebentar.');
+    if (!loadingMsg) throw new Error('Gagal membuat pesan loading.');
+
+    const qris = await autogopay.generateQris(duration.price);
+
+    if (!qris || !qris.transaction_id) {
+      throw new Error('Response AutoGoPay tidak memiliki transaction_id.');
+    }
+    if (!qris.qr_url) {
+      throw new Error('Response AutoGoPay tidak memiliki qr_url.');
+    }
+
+    store.saveTransaction(qris.transaction_id, {
+      chatId: ctx.chat.id,
+      productId: product.id,
+      productName: `${product.name} (${duration.label})`,
+      amount: qris.amount,
+      orderId: qris.order_id,
+      status: qris.transaction_status,
+      durationDays: duration.days,
+      durationLabel: duration.label,
+    });
+
+    const caption =
+      `🧾 *Pesanan Baru*\n\n` +
+      `Produk: ${product.name}\n` +
+      `Durasi: ${duration.label} (${duration.days} hari)\n` +
+      `Jumlah: *${formatRupiah(qris.amount)}*\n` +
+      `Order ID: \`${qris.order_id}\`\n` +
+      `Kedaluwarsa: ${qris.expiry_time}\n\n` +
+      `Silakan scan QRIS menggunakan aplikasi e-wallet kamu, atau klik tombol pembayaran.\n\n` +
+      `⚡ Akun akan dibuat & dikirim otomatis begitu pembayaran terkonfirmasi.`;
+
+    await ctx.telegram.editMessageMedia(
+      ctx.chat.id,
+      loadingMsg.message_id,
+      undefined,
+      { type: 'photo', media: qris.qr_url, caption, parse_mode: 'Markdown' },
+      paymentKeyboard(qris.transaction_id, qris.checkout_url)
+    );
+
+    const tx = store.getTransaction(qris.transaction_id);
+    if (tx) {
+      tx.messageId = loadingMsg.message_id;
+      store.saveTransaction(qris.transaction_id, tx);
+    }
+
+    try {
+      poller.startPolling(qris.transaction_id, ctx.telegram, sendPaidNotification);
+    } catch (pollErr) {
+      console.error('[POLLER START ERROR]', pollErr.message);
+    }
+  } catch (err) {
+    console.error('[DURBUY ERROR]', err?.response?.data || err?.message || err);
+    if (loadingMsg?.message_id) {
+      try {
+        await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+      } catch (_) {}
+    }
+    await safeReply(ctx, '❌ Gagal membuat QRIS pembayaran.\n\nSilakan coba lagi beberapa saat.');
+  } finally {
+    processingBuy.delete(lockKey);
+  }
+});
+
+
+/*
+|--------------------------------------------------------------------------
 | CHECK PAYMENT STATUS
 |--------------------------------------------------------------------------
 */
@@ -782,22 +925,30 @@ async function sendPaidNotification(
         : '-';
 
 
-    /*
-     * Ambil satu akun dari stok untuk dikirim ke pembeli.
-     */
-    const account = takeStock(tx.productId);
-
-
+    const product = getProductById(tx.productId);
     let deliveryText;
-    if (account) {
-      deliveryText =
-        `\n\n🔑 *Detail Akun Kamu:*\n` +
-        `\`\`\`\n${account}\n\`\`\``;
-      store.markNotified(transactionId, account);
+
+    if (product && product.type === 'auto') {
+      /*
+       * AUTO-PROVISIONING via SSH
+       */
+      deliveryText = await provisionAutoAccount(tx, product);
     } else {
-      deliveryText =
-        '\n\n⚠️ Stok akun baru saja habis di saat bersamaan. ' +
-        'Admin akan mengirimkan akun secara manual segera.';
+      /*
+       * Ambil satu akun dari stok manual untuk dikirim ke pembeli.
+       */
+      const account = takeStock(tx.productId);
+
+      if (account) {
+        deliveryText =
+          `\n\n🔑 *Detail Akun Kamu:*\n` +
+          `\`\`\`\n${account}\n\`\`\``;
+        store.markNotified(transactionId, account);
+      } else {
+        deliveryText =
+          '\n\n⚠️ Stok akun baru saja habis di saat bersamaan. ' +
+          'Admin akan mengirimkan akun secara manual segera.';
+      }
     }
 
 
@@ -817,6 +968,66 @@ async function sendPaidNotification(
     console.error(
       '[PAID NOTIFICATION ERROR]',
       err?.response?.data || err?.message || err
+    );
+  }
+}
+
+
+/**
+ * Buat akun baru otomatis lewat SSH ke server VPN, berdasarkan
+ * command template yang diatur admin di panel. Mengembalikan teks
+ * yang siap ditempel ke pesan notifikasi pembeli.
+ */
+async function provisionAutoAccount(tx, product) {
+  try {
+    const server = db.getServerById(product.serverId);
+    if (!server) {
+      db.addLog('PROVISION_FAILED', `Server tidak ditemukan untuk produk ${product.id} (tx ${tx.transactionId})`);
+      return '\n\n⚠️ Gagal membuat akun otomatis (server belum diatur admin). Admin akan proses manual.';
+    }
+    if (!product.commandTemplate) {
+      db.addLog('PROVISION_FAILED', `Command template kosong untuk produk ${product.id} (tx ${tx.transactionId})`);
+      return '\n\n⚠️ Gagal membuat akun otomatis (template command belum diatur admin). Admin akan proses manual.';
+    }
+
+    const prefix = (product.protocol || 'vpn').slice(0, 4);
+    const { username, password } = sshProvision.generateCredentials(prefix);
+    const days = tx.durationDays || 30;
+
+    const command = sshProvision.fillTemplate(product.commandTemplate, {
+      username,
+      password,
+      days,
+    });
+
+    const result = await sshProvision.runCommand(server, command, 30000);
+
+    store.markNotified(tx.transactionId, `${username}:${password}`);
+    db.addLog(
+      'PROVISION_SUCCESS',
+      `Akun ${username} dibuat di server ${server.name} untuk produk ${product.id}`
+    );
+
+    const scriptOutput = (result.stdout || '').trim();
+
+    return (
+      `\n\n🔑 *Detail Akun Kamu:*\n` +
+      `Username: \`${username}\`\n` +
+      `Password: \`${password}\`\n` +
+      `Durasi: ${days} hari\n` +
+      (scriptOutput
+        ? `\n📋 *Output dari server:*\n\`\`\`\n${scriptOutput.slice(0, 800)}\n\`\`\``
+        : '')
+    );
+  } catch (err) {
+    console.error('[PROVISION ERROR]', err.message);
+    db.addLog(
+      'PROVISION_FAILED',
+      `Error provisioning produk ${product.id} (tx ${tx.transactionId}): ${err.message}`
+    );
+    return (
+      '\n\n⚠️ Pembayaran kamu berhasil, tapi akun sedang gagal dibuat otomatis ' +
+      '(server sedang bermasalah). Admin akan segera memprosesnya secara manual, mohon tunggu.'
     );
   }
 }
