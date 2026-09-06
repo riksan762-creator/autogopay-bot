@@ -33,6 +33,7 @@ function seedData() {
     },
     blockedUsers: [], // array of chatId (number/string) yang diblokir
     activityLogs: [], // riwayat aksi admin
+    vpnServers: [], // daftar VPS untuk auto-provisioning akun (SSH/VMess/Trojan)
   };
 }
 
@@ -64,6 +65,10 @@ function loadDb() {
     db.activityLogs = [];
     migrated = true;
   }
+  if (!db.vpnServers) {
+    db.vpnServers = [];
+    migrated = true;
+  }
   if (migrated) {
     fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
   }
@@ -79,33 +84,67 @@ function saveDb(db) {
 
 function getAllProducts() {
   const db = loadDb();
-  return db.products.map((p) => ({ ...p, stockCount: (db.stock[p.id] || []).length }));
+  return db.products.map((p) => normalizeProduct(p, db));
 }
 
 function getProductById(id) {
   const db = loadDb();
   const product = db.products.find((p) => p.id === id);
   if (!product) return null;
-  return { ...product, stockCount: (db.stock[id] || []).length };
+  return normalizeProduct(product, db);
 }
 
-function addProduct({ id, name, price, description }) {
+function normalizeProduct(p, db) {
+  const type = p.type === 'auto' ? 'auto' : 'stock';
+  if (type === 'stock') {
+    return { ...p, type, stockCount: (db.stock[p.id] || []).length };
+  }
+  // type === 'auto': tidak pakai stok manual, harga ditentukan per durasi
+  const durations = Array.isArray(p.durations) ? p.durations : [];
+  return {
+    ...p,
+    type,
+    durations,
+    price: durations.length ? Math.min(...durations.map((d) => d.price)) : 0,
+    stockCount: durations.length > 0 ? Infinity : 0, // "auto" dianggap selalu tersedia selama ada durasi & server valid
+  };
+}
+
+function addProduct({ id, name, price, description, type, serverId, protocol, commandTemplate, durations }) {
   const db = loadDb();
   if (db.products.some((p) => p.id === id)) {
     throw new Error(`Product ID "${id}" sudah dipakai, pilih ID lain.`);
   }
-  db.products.push({ id, name, price: Number(price), description: description || '' });
-  db.stock[id] = db.stock[id] || [];
+  const product = { id, name, description: description || '' };
+  if (type === 'auto') {
+    product.type = 'auto';
+    product.serverId = serverId || '';
+    product.protocol = protocol || 'ssh';
+    product.commandTemplate = commandTemplate || '';
+    product.durations = Array.isArray(durations) ? durations : [];
+  } else {
+    product.type = 'stock';
+    product.price = Number(price) || 0;
+    db.stock[id] = db.stock[id] || [];
+  }
+  db.products.push(product);
   saveDb(db);
 }
 
-function updateProduct(id, { name, price, description }) {
+function updateProduct(id, { name, price, description, serverId, protocol, commandTemplate, durations }) {
   const db = loadDb();
   const product = db.products.find((p) => p.id === id);
   if (!product) throw new Error('Produk tidak ditemukan');
   if (name !== undefined) product.name = name;
-  if (price !== undefined) product.price = Number(price);
   if (description !== undefined) product.description = description;
+  if (product.type === 'auto') {
+    if (serverId !== undefined) product.serverId = serverId;
+    if (protocol !== undefined) product.protocol = protocol;
+    if (commandTemplate !== undefined) product.commandTemplate = commandTemplate;
+    if (durations !== undefined) product.durations = durations;
+  } else {
+    if (price !== undefined) product.price = Number(price);
+  }
   saveDb(db);
 }
 
@@ -240,33 +279,6 @@ function getStats() {
   return { totalRevenue, totalOrders, totalCustomers, totalStock };
 }
 
-module.exports = {
-  getAllProducts,
-  getProductById,
-  addProduct,
-  updateProduct,
-  deleteProduct,
-  getStock,
-  addStockLines,
-  takeOneStock,
-  saveTransaction,
-  getTransaction,
-  updateStatus,
-  markNotified,
-  getAllTransactions,
-  getCustomers,
-  getStats,
-  getSettings,
-  updateSettings,
-  isBlocked,
-  blockUser,
-  unblockUser,
-  addLog,
-  getLogs,
-  exportBackup,
-  restoreBackup,
-};
-
 // ---------- Pengaturan (Konfigurasi) ----------
 
 function getSettings() {
@@ -339,5 +351,90 @@ function restoreBackup(newDb) {
   newDb.settings = newDb.settings || seedData().settings;
   newDb.blockedUsers = newDb.blockedUsers || [];
   newDb.activityLogs = newDb.activityLogs || [];
+  newDb.vpnServers = newDb.vpnServers || [];
   saveDb(newDb);
 }
+
+// ---------- VPN Servers (untuk auto-provisioning) ----------
+
+function getServers() {
+  const db = loadDb();
+  return db.vpnServers;
+}
+
+function getServerById(id) {
+  const db = loadDb();
+  return db.vpnServers.find((s) => s.id === id) || null;
+}
+
+function addServer({ id, name, ip, sshPort, sshUser, sshPassword, isp, notes }) {
+  const db = loadDb();
+  if (db.vpnServers.some((s) => s.id === id)) {
+    throw new Error(`Server ID "${id}" sudah dipakai, pilih ID lain.`);
+  }
+  db.vpnServers.push({
+    id,
+    name,
+    ip,
+    sshPort: Number(sshPort) || 22,
+    sshUser: sshUser || 'root',
+    sshPassword: sshPassword || '',
+    isp: isp || '',
+    notes: notes || '',
+  });
+  saveDb(db);
+}
+
+function updateServer(id, { name, ip, sshPort, sshUser, sshPassword, isp, notes }) {
+  const db = loadDb();
+  const server = db.vpnServers.find((s) => s.id === id);
+  if (!server) throw new Error('Server tidak ditemukan');
+  if (name !== undefined) server.name = name;
+  if (ip !== undefined) server.ip = ip;
+  if (sshPort !== undefined) server.sshPort = Number(sshPort) || 22;
+  if (sshUser !== undefined) server.sshUser = sshUser;
+  // Kalau field password dikosongkan saat edit, JANGAN ditimpa jadi kosong -
+  // biar admin tidak perlu isi ulang password tiap kali cuma mau ubah nama/ISP.
+  if (sshPassword !== undefined && sshPassword !== '') server.sshPassword = sshPassword;
+  if (isp !== undefined) server.isp = isp;
+  if (notes !== undefined) server.notes = notes;
+  saveDb(db);
+}
+
+function deleteServer(id) {
+  const db = loadDb();
+  db.vpnServers = db.vpnServers.filter((s) => s.id !== id);
+  saveDb(db);
+}
+
+module.exports = {
+  getAllProducts,
+  getProductById,
+  addProduct,
+  updateProduct,
+  deleteProduct,
+  getStock,
+  addStockLines,
+  takeOneStock,
+  saveTransaction,
+  getTransaction,
+  updateStatus,
+  markNotified,
+  getAllTransactions,
+  getCustomers,
+  getStats,
+  getSettings,
+  updateSettings,
+  isBlocked,
+  blockUser,
+  unblockUser,
+  addLog,
+  getLogs,
+  exportBackup,
+  restoreBackup,
+  getServers,
+  getServerById,
+  addServer,
+  updateServer,
+  deleteServer,
+};
