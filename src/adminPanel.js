@@ -27,6 +27,7 @@ const ICONS = {
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z" stroke-linejoin="round"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round"/>',
   bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4M9 4h6" stroke-linecap="round"/><circle cx="9" cy="14" r="1.3"/><circle cx="15" cy="14" r="1.3"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><circle cx="7" cy="7.5" r="0.8" fill="currentColor" stroke="none"/><circle cx="7" cy="16.5" r="0.8" fill="currentColor" stroke="none"/>',
 };
 
 function svgIcon(name, size = 18) {
@@ -38,6 +39,7 @@ const NAV = [
   { key: 'settings', href: '/admin/settings', icon: 'settings', label: 'Konfigurasi' },
   { key: 'orders', href: '/admin/orders', icon: 'orders', label: 'Transaksi' },
   { key: 'products', href: '/admin/products', icon: 'products', label: 'Produk & Markup' },
+  { key: 'vpnservers', href: '/admin/vpn-servers', icon: 'server', label: 'VPN Management' },
   { key: 'customers', href: '/admin/customers', icon: 'customers', label: 'Kelola User' },
   { key: 'logs', href: '/admin/logs', icon: 'logs', label: 'Activity Logs' },
   { key: 'broadcast', href: '/admin/broadcast', icon: 'broadcast', label: 'Broadcast' },
@@ -311,36 +313,83 @@ function mountAdminPanel(app) {
   app.get('/admin/products', requireAdmin, (req, res) => {
     const products = db.getAllProducts();
     const rows = products
-      .map(
-        (p) => `
+      .map((p) => {
+        let priceStockCol;
+        if (p.type === 'auto') {
+          const durSummary = (p.durations || [])
+            .map((d) => `${d.label}: ${formatRupiah(d.price)}`)
+            .join('<br/>');
+          priceStockCol = `<span class="badge ok">Auto</span><br/><span class="muted">${durSummary || 'Belum ada durasi'}</span>`;
+        } else {
+          priceStockCol = `${formatRupiah(p.price)}<br/>${
+            p.stockCount > 0
+              ? `<span class="badge ok">${p.stockCount} tersedia</span>`
+              : `<span class="badge bad">Habis</span>`
+          }`;
+        }
+
+        const stockAction =
+          p.type === 'stock'
+            ? `<a class="btn secondary" href="/admin/products/${p.id}/stock">Kelola Stok</a>`
+            : '';
+
+        return `
       <tr>
         <td><strong>${esc(p.name)}</strong><br/><span class="muted">${esc(p.id)}</span></td>
-        <td>${formatRupiah(p.price)}</td>
-        <td>${p.stockCount > 0 ? `<span class="badge ok">${p.stockCount} tersedia</span>` : `<span class="badge bad">Habis</span>`}</td>
+        <td>${priceStockCol}</td>
         <td>
-          <a class="btn secondary" href="/admin/products/${p.id}/stock">Kelola Stok</a>
+          ${stockAction}
           <a class="btn secondary" href="/admin/products/${p.id}/edit">Edit</a>
           <form class="inline" method="POST" action="/admin/products/${p.id}/delete" onsubmit="return confirm('Yakin hapus produk ini beserta stoknya?');">
             <button class="danger" type="submit">Hapus</button>
           </form>
         </td>
-      </tr>`
-      )
+      </tr>`;
+      })
       .join('');
 
     const body = `
       <div class="card">
         <h2 style="margin-top:0;">Daftar Produk</h2>
         <table>
-          <thead><tr><th>Produk</th><th>Harga Jual</th><th>Stok</th><th>Aksi</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="4" class="muted">Belum ada produk.</td></tr>'}</tbody>
+          <thead><tr><th>Produk</th><th>Harga / Stok</th><th>Aksi</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="3" class="muted">Belum ada produk.</td></tr>'}</tbody>
         </table>
         <a class="btn" href="/admin/products/new">+ Tambah Produk Baru</a>
       </div>`;
     res.send(layout('Produk & Markup', body, 'products'));
   });
 
+  function productFormScript() {
+    return `
+      <script>
+        function toggleProductType() {
+          var type = document.querySelector('input[name="type"]:checked').value;
+          document.getElementById('stockFields').style.display = type === 'stock' ? 'block' : 'none';
+          document.getElementById('autoFields').style.display = type === 'auto' ? 'block' : 'none';
+        }
+      </script>`;
+  }
+
+  function durationRowsHtml(durations) {
+    const rows = durations && durations.length ? durations : [{}, {}, {}];
+    return rows
+      .slice(0, 5)
+      .map(
+        (d) => `
+        <div class="row">
+          <div><label>Label (mis. Per Minggu)</label><input type="text" name="durLabel" value="${esc(d.label || '')}" /></div>
+          <div><label>Jumlah Hari</label><input type="number" name="durDays" value="${d.days || ''}" min="1" /></div>
+          <div><label>Harga (Rp)</label><input type="number" name="durPrice" value="${d.price || ''}" min="1" /></div>
+        </div>`
+      )
+      .join('');
+  }
+
   app.get('/admin/products/new', requireAdmin, (req, res) => {
+    const servers = db.getServers();
+    const serverOptions = servers.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.ip)})</option>`).join('');
+
     const body = `
       <div class="card">
         <h2 style="margin-top:0;">Tambah Produk Baru</h2>
@@ -349,21 +398,65 @@ function mountAdminPanel(app) {
           <input type="text" name="id" required pattern="[a-z0-9\\-]+" />
           <label>Nama Produk</label>
           <input type="text" name="name" required />
-          <label>Harga Jual (Rp)</label>
-          <input type="number" name="price" min="1" required />
           <label>Deskripsi</label>
           <textarea name="description" rows="3"></textarea>
+
+          <label>Tipe Produk</label>
+          <div class="row">
+            <label><input type="radio" name="type" value="stock" checked onchange="toggleProductType()" /> Stok Manual (kredensial ditempel admin)</label>
+            <label><input type="radio" name="type" value="auto" onchange="toggleProductType()" /> Auto-Provisioning (dibuat otomatis via SSH)</label>
+          </div>
+
+          <div id="stockFields">
+            <label>Harga Jual (Rp)</label>
+            <input type="number" name="price" min="1" />
+          </div>
+
+          <div id="autoFields" style="display:none;">
+            ${servers.length === 0 ? '<p class="muted">⚠️ Belum ada server VPN. Tambah dulu di menu <a href="/admin/vpn-servers">VPN Management</a>.</p>' : ''}
+            <label>Server VPN</label>
+            <select name="serverId"><option value="">- pilih server -</option>${serverOptions}</select>
+            <label>Protokol</label>
+            <select name="protocol">
+              <option value="ssh">SSH</option>
+              <option value="vmess">VMess</option>
+              <option value="vless">VLess</option>
+              <option value="trojan">Trojan</option>
+              <option value="shadowsocks">Shadowsocks</option>
+            </select>
+            <label>Command Template (gunakan {username}, {password}, {days})</label>
+            <textarea name="commandTemplate" rows="2" placeholder="bash /root/addssh.sh {username} {password} {days}"></textarea>
+            <label style="margin-top:16px;">Pilihan Durasi & Harga</label>
+            <p class="muted">Isi minimal 1 baris. Kosongkan baris yang tidak dipakai.</p>
+            ${durationRowsHtml()}
+          </div>
+
           <button type="submit">Simpan Produk</button>
         </form>
-      </div>`;
+      </div>
+      ${productFormScript()}`;
     res.send(layout('Tambah Produk', body, 'products'));
   });
 
+  function parseDurationsFromBody(body) {
+    const labels = [].concat(body.durLabel || []);
+    const days = [].concat(body.durDays || []);
+    const prices = [].concat(body.durPrice || []);
+    const durations = [];
+    for (let i = 0; i < labels.length; i++) {
+      if (labels[i] && days[i] && prices[i]) {
+        durations.push({ label: labels[i], days: Number(days[i]), price: Number(prices[i]) });
+      }
+    }
+    return durations;
+  }
+
   app.post('/admin/products', requireAdmin, (req, res) => {
     try {
-      const { id, name, price, description } = req.body;
-      db.addProduct({ id: id.trim(), name, price, description });
-      db.addLog('ADD_PRODUCT', `Produk baru: ${name} (${id})`);
+      const { id, name, price, description, type, serverId, protocol, commandTemplate } = req.body;
+      const durations = parseDurationsFromBody(req.body);
+      db.addProduct({ id: id.trim(), name, price, description, type, serverId, protocol, commandTemplate, durations });
+      db.addLog('ADD_PRODUCT', `Produk baru: ${name} (${id}) [${type}]`);
       res.redirect('/admin/products');
     } catch (err) {
       res.send(layout('Error', `<div class="card"><p>❌ ${esc(err.message)}</p><a class="btn" href="/admin/products/new">Kembali</a></div>`, 'products'));
@@ -373,18 +466,48 @@ function mountAdminPanel(app) {
   app.get('/admin/products/:id/edit', requireAdmin, (req, res) => {
     const product = db.getProductById(req.params.id);
     if (!product) return res.redirect('/admin/products');
+
+    const servers = db.getServers();
+    const serverOptions = servers
+      .map((s) => `<option value="${esc(s.id)}" ${product.serverId === s.id ? 'selected' : ''}>${esc(s.name)} (${esc(s.ip)})</option>`)
+      .join('');
+
+    const protocolOptions = ['ssh', 'vmess', 'vless', 'trojan', 'shadowsocks']
+      .map((p) => `<option value="${p}" ${product.protocol === p ? 'selected' : ''}>${p.toUpperCase()}</option>`)
+      .join('');
+
+    const isAuto = product.type === 'auto';
+
     const body = `
       <div class="card">
         <h2 style="margin-top:0;">Edit Produk</h2>
+        <p class="muted">Tipe produk (${isAuto ? 'Auto-Provisioning' : 'Stok Manual'}) tidak bisa diubah setelah dibuat. Hapus &amp; buat produk baru jika perlu ganti tipe.</p>
         <form method="POST" action="/admin/products/${product.id}">
           <label>ID Produk</label>
           <input type="text" value="${esc(product.id)}" disabled />
           <label>Nama Produk</label>
           <input type="text" name="name" value="${esc(product.name)}" required />
-          <label>Harga Jual (Rp)</label>
-          <input type="number" name="price" value="${product.price}" min="1" required />
           <label>Deskripsi</label>
           <textarea name="description" rows="3">${esc(product.description)}</textarea>
+
+          ${
+            isAuto
+              ? `
+          <label>Server VPN</label>
+          <select name="serverId"><option value="">- pilih server -</option>${serverOptions}</select>
+          <label>Protokol</label>
+          <select name="protocol">${protocolOptions}</select>
+          <label>Command Template (gunakan {username}, {password}, {days})</label>
+          <textarea name="commandTemplate" rows="2">${esc(product.commandTemplate || '')}</textarea>
+          <label style="margin-top:16px;">Pilihan Durasi & Harga</label>
+          ${durationRowsHtml(product.durations)}
+          `
+              : `
+          <label>Harga Jual (Rp)</label>
+          <input type="number" name="price" value="${product.price}" min="1" required />
+          `
+          }
+
           <button type="submit">Simpan Perubahan</button>
         </form>
       </div>`;
@@ -392,8 +515,9 @@ function mountAdminPanel(app) {
   });
 
   app.post('/admin/products/:id', requireAdmin, (req, res) => {
-    const { name, price, description } = req.body;
-    db.updateProduct(req.params.id, { name, price, description });
+    const { name, price, description, serverId, protocol, commandTemplate } = req.body;
+    const durations = parseDurationsFromBody(req.body);
+    db.updateProduct(req.params.id, { name, price, description, serverId, protocol, commandTemplate, durations });
     db.addLog('EDIT_PRODUCT', `Produk diedit: ${req.params.id}`);
     res.redirect('/admin/products');
   });
@@ -436,6 +560,124 @@ function mountAdminPanel(app) {
     const added = db.addStockLines(req.params.id, lines);
     db.addLog('ADD_STOCK', `${added} akun ditambahkan ke ${req.params.id}`);
     res.redirect(`/admin/products/${req.params.id}/stock`);
+  });
+
+  // ---------- VPN Management (server untuk auto-provisioning) ----------
+
+  app.get('/admin/vpn-servers', requireAdmin, (req, res) => {
+    const servers = db.getServers();
+    const rows = servers
+      .map(
+        (s) => `
+      <tr>
+        <td><strong>${esc(s.name)}</strong><br/><span class="muted">${esc(s.id)}</span></td>
+        <td>${esc(s.ip)}:${esc(s.sshPort)}</td>
+        <td>${esc(s.sshUser)}</td>
+        <td>${esc(s.isp) || '-'}</td>
+        <td>
+          <a class="btn secondary" href="/admin/vpn-servers/${s.id}/edit">Edit</a>
+          <form class="inline" method="POST" action="/admin/vpn-servers/${s.id}/delete" onsubmit="return confirm('Yakin hapus server ini? Produk auto yang memakainya akan gagal jalan.');">
+            <button class="danger" type="submit">Hapus</button>
+          </form>
+        </td>
+      </tr>`
+      )
+      .join('');
+
+    const body = `
+      <div class="card">
+        <h2 style="margin-top:0;">Daftar Server VPN</h2>
+        <p class="muted">Server ini dipakai untuk membuat akun otomatis via SSH saat ada produk tipe "Auto-Provisioning" yang dibeli.</p>
+        <table>
+          <thead><tr><th>Nama</th><th>IP:Port</th><th>User SSH</th><th>ISP</th><th>Aksi</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="5" class="muted">Belum ada server.</td></tr>'}</tbody>
+        </table>
+        <a class="btn" href="/admin/vpn-servers/new">+ Tambah Server Baru</a>
+      </div>
+      <div class="card">
+        <p class="muted">🔒 <strong>Keamanan:</strong> Password SSH disimpan di file <code>data/db.json</code> di VPS bot ini. Pastikan file itu tidak pernah ikut ter-upload ke GitHub (sudah otomatis diabaikan lewat <code>.gitignore</code>) dan VPS ini aman dari akses orang lain.</p>
+      </div>`;
+    res.send(layout('VPN Management', body, 'vpnservers'));
+  });
+
+  app.get('/admin/vpn-servers/new', requireAdmin, (req, res) => {
+    const body = `
+      <div class="card">
+        <h2 style="margin-top:0;">Tambah Server VPN</h2>
+        <form method="POST" action="/admin/vpn-servers">
+          <label>ID Server (unik, tanpa spasi, contoh: sg-1)</label>
+          <input type="text" name="id" required pattern="[a-z0-9\\-]+" />
+          <label>Nama Server</label>
+          <input type="text" name="name" required placeholder="Server Singapore 1" />
+          <div class="row">
+            <div><label>IP Address</label><input type="text" name="ip" required placeholder="103.xx.xx.xx" /></div>
+            <div><label>SSH Port</label><input type="number" name="sshPort" value="22" /></div>
+          </div>
+          <div class="row">
+            <div><label>SSH Username</label><input type="text" name="sshUser" value="root" /></div>
+            <div><label>SSH Password</label><input type="password" name="sshPassword" required /></div>
+          </div>
+          <label>ISP / Provider (opsional)</label>
+          <input type="text" name="isp" placeholder="DigitalOcean, Vultr, Biznet, dll" />
+          <label>Catatan (opsional)</label>
+          <textarea name="notes" rows="2"></textarea>
+          <button type="submit">Simpan Server</button>
+        </form>
+      </div>`;
+    res.send(layout('Tambah Server VPN', body, 'vpnservers'));
+  });
+
+  app.post('/admin/vpn-servers', requireAdmin, (req, res) => {
+    try {
+      const { id, name, ip, sshPort, sshUser, sshPassword, isp, notes } = req.body;
+      db.addServer({ id: id.trim(), name, ip, sshPort, sshUser, sshPassword, isp, notes });
+      db.addLog('ADD_SERVER', `Server baru: ${name} (${ip})`);
+      res.redirect('/admin/vpn-servers');
+    } catch (err) {
+      res.send(layout('Error', `<div class="card"><p>❌ ${esc(err.message)}</p><a class="btn" href="/admin/vpn-servers/new">Kembali</a></div>`, 'vpnservers'));
+    }
+  });
+
+  app.get('/admin/vpn-servers/:id/edit', requireAdmin, (req, res) => {
+    const server = db.getServerById(req.params.id);
+    if (!server) return res.redirect('/admin/vpn-servers');
+    const body = `
+      <div class="card">
+        <h2 style="margin-top:0;">Edit Server VPN</h2>
+        <form method="POST" action="/admin/vpn-servers/${server.id}">
+          <label>ID Server</label>
+          <input type="text" value="${esc(server.id)}" disabled />
+          <label>Nama Server</label>
+          <input type="text" name="name" value="${esc(server.name)}" required />
+          <div class="row">
+            <div><label>IP Address</label><input type="text" name="ip" value="${esc(server.ip)}" required /></div>
+            <div><label>SSH Port</label><input type="number" name="sshPort" value="${server.sshPort}" /></div>
+          </div>
+          <div class="row">
+            <div><label>SSH Username</label><input type="text" name="sshUser" value="${esc(server.sshUser)}" /></div>
+            <div><label>SSH Password (kosongkan jika tidak ingin mengubah)</label><input type="password" name="sshPassword" placeholder="••••••••" /></div>
+          </div>
+          <label>ISP / Provider</label>
+          <input type="text" name="isp" value="${esc(server.isp)}" />
+          <label>Catatan</label>
+          <textarea name="notes" rows="2">${esc(server.notes)}</textarea>
+          <button type="submit">Simpan Perubahan</button>
+        </form>
+      </div>`;
+    res.send(layout('Edit Server VPN', body, 'vpnservers'));
+  });
+
+  app.post('/admin/vpn-servers/:id', requireAdmin, (req, res) => {
+    const { name, ip, sshPort, sshUser, sshPassword, isp, notes } = req.body;
+    db.updateServer(req.params.id, { name, ip, sshPort, sshUser, sshPassword, isp, notes });
+    db.addLog('EDIT_SERVER', `Server diedit: ${req.params.id}`);
+    res.redirect('/admin/vpn-servers');
+  });
+
+  app.post('/admin/vpn-servers/:id/delete', requireAdmin, (req, res) => {
+    db.deleteServer(req.params.id);
+    db.addLog('DELETE_SERVER', `Server dihapus: ${req.params.id}`);
+    res.redirect('/admin/vpn-servers');
   });
 
   // ---------- Transaksi ----------
